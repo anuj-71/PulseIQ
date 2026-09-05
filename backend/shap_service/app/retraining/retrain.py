@@ -1,7 +1,8 @@
 from pathlib import Path
 import subprocess
 
-FEEDBACK_FILE = Path("feedback.csv")
+SERVICE_DIR = Path(__file__).resolve().parent.parent.parent
+FEEDBACK_FILE = SERVICE_DIR / "feedback.csv"
 
 
 def retrain_model():

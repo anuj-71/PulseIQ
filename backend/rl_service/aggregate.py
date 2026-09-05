@@ -89,6 +89,6 @@ class Aggregator:
                 [outcome_map.get(records[idx]['user_id'], 0.0) for idx in cluster_indices])
 
             report_lines.append(
-                f"{pct:.0f}% of users — dominant cause: {dominant_cause} — recommended action: {most_common_action} — avg outcome: {avg_outcome:+.2f} engagement")
+                f"{pct:.0f}% of users - dominant cause: {dominant_cause} - recommended action: {most_common_action} - avg outcome: {avg_outcome:+.2f} engagement")
 
         return "\n".join(report_lines)

@@ -1,142 +1,221 @@
-# AI-VENGERS
+# PulseIQ: Cloud-Native Platform
 
-# PulseIQ – Explainable AI Customer Intelligence Platform
-
-## Overview
-PulseIQ is an Explainable AI Customer Intelligence Platform featuring a Risk & Behavior Engine.
-
-### Features
-- Feature engineering
-- Data preprocessing
-- PyTorch risk prediction
-- SHAP explainability
-- FastAPI REST API
-- Feedback collection
-- Automated retraining
-
-### Tech Stack
-- Python, PyTorch, FastAPI, SHAP, Pandas, NumPy, Scikit-learn, Uvicorn, Pytest
-
-### Installation
-- Create a virtual environment.
-- Install dependencies: `pip install -r requirements.txt`
-- Run the API: `uvicorn app.main:app --reload`
-- Execute tests: `pytest`
-
-### API Endpoints
-- `GET /`
-- `POST /risk/score`
-- `POST /feedback`
+PulseIQ is an intelligent, full-stack cloud platform for customer retention and proactive intervention. It integrates predictive neural network modeling, SHAP explainable AI, retrieval-augmented knowledge assistance, contextual reinforcement learning, and a relational database backend. The system is designed for deployment on Amazon Web Services (AWS) using Free Tier eligible services (EC2, S3, RDS PostgreSQL, CloudFormation).
 
 ---
 
-# PulseIQ - Knowledge Assistant (RAG)
+## AWS Cloud Architecture
 
-**Status:** Complete
-
-This is the Retrieval-Augmented Generation (RAG) subsystem of the PulseIQ project. It provides an intelligent backend service for document ingestion, semantic search, and LLM-powered response generation. It takes user queries, embeds them, retrieves relevant document chunks from Qdrant, and securely uses Llama 3.3 to answer the query, strictly grounding the response in the provided context.
-
-## How to Run Locally
-
-1. **Start the Vector Database (Qdrant)**
-   Ensure Docker Desktop is running, then start the Qdrant container:
-   ```bash
-   docker-compose up -d
-   ```
-
-2. **Run Document Ingestion**
-   Ingest the sample files from `data/raw_docs/` into Qdrant:
-   ```bash
-   $env:PYTHONPATH="src"
-   python src/knowledge_assistant/ingestion/index_builder.py
-   ```
-
-3. **Start the API Server**
-   Start the FastAPI development server:
-   ```bash
-   $env:PYTHONPATH="src"
-   uvicorn knowledge_assistant.api.main:app --reload --port 8080
-   ```
-
-## API Contract
-
-**Endpoint:** `POST /knowledge/respond`
-
-**Request:**
-```json
-{
-  "user_id": "user_123",
-  "issue_text": "I need to dump out all my logs into a CSV or PDF for compliance, how?"
-}
 ```
-
-**Response:**
-```json
-{
-  "retrieved_docs": [
-    {
-      "doc_id": "faq_export_data",
-      "title": "FAQ: How to Export Your Data",
-      "snippet": "To export data from a specific dashboard view: 1. Navigate to the desired dashboard...",
-      "relevance": 0.85
-    }
-  ],
-  "grounded_response": "To export all your logs for compliance purposes, you can follow these steps as outlined in [FAQ: How to Export Your Data]...",
-  "confidence": 0.9,
-  "model_version": "llama-3.3-70b-versatile"
-}
++---------------------------------------------------------------------------------+
+|                                 AWS Cloud (Free Tier)                           |
+|                                                                                 |
+|  +--------------------------------+       +----------------------------------+  |
+|  |       Amazon S3 Storage        |       |        Amazon RDS PostgreSQL     |  |
+|  |  - Model Artifacts Bucket      |       |  (db.t3.micro / db.t4g.micro)    |  |
+|  |  - Knowledge Base Docs Bucket  |       |  - customers table               |  |
+|  |  - Generated Reports & Plots   |       |  - risk_scores table             |  |
+|  +----------------+---------------+       |  - outcomes table                |  |
+|                   ^                       |  - feedback table                |  |
+|                   | boto3                 +-----------------+----------------+  |
+|                   |                                         ^                   |
+|  +----------------v-----------------------------------------+----------------+  |
+|  |                   Amazon EC2 Instance (t2.micro / t3.micro)               |  |
+|  |                                                                           |  |
+|  |   +-----------------------+               +--------------------------+    |  |
+|  |   |   FastAPI Backend     |<------------->|    Qdrant Vector DB      |    |  |
+|  |   | (SHAP + RAG + RL + DB)|               |  (Docker Container:6333) |    |  |
+|  |   +-----------+-----------+               +--------------------------+    |  |
+|  |               ^                                                           |  |
+|  |               | Nginx Reverse Proxy (Port 80/443)                         |  |
+|  |               v                                                           |  |
+|  |   +-----------------------+                                               |  |
+|  |   |  React SPA Frontend   |                                               |  |
+|  |   |    (Production Dist)  |                                               |  |
+|  |   +-----------------------+                                               |  |
+|  +---------------------------------------------------------------------------+  |
++---------------------------------------------------------------------------------+
 ```
-
-## Evaluation Results
-
-To view the groundedness and hallucination results, check out the evaluation report:
-[Evaluation Report](src/knowledge_assistant/eval/eval_report.md)
-
-### Known Limitations
-
-**Confidence Scoring Heuristic:** The current confidence score heuristic uses the presence of hedging language and citation density as a proxy for answer helpfulness. As a result, it cannot reliably distinguish between an LLM offering a genuinely helpful partial/workaround answer and an LLM merely citing a document to prove it was checked and found irrelevant. Both behaviors yield similar confidence scores (e.g. 0.55-0.75). A more accurate future fix would involve the LLM generator or judge directly outputting a helpfulness label (fully/partial/none) to drive the confidence score, rather than relying on a citation-density proxy.
 
 ---
 
-# PulseIQ Action Policy & Feedback Loop
+## Core System Capabilities
 
-This is the Action Policy & Feedback Loop subsystem for PulseIQ. It uses a Contextual Bandit (LinUCB) to dynamically select the best intervention action for at-risk users, based on risk scores, behavioral attributions, and RAG knowledge assistance confidence.
+1. **Relational Database Layer (`backend/db`)**
+   - Built on **SQLAlchemy ORM** supporting **Amazon RDS PostgreSQL** (and local SQLite fallback).
+   - Tables: `customers`, `risk_scores`, `outcomes`, and `feedback`.
+   - Automated startup migration and seeding (`seed.py`).
 
-## Getting Started
+2. **Amazon S3 Cloud Integration (`backend/cloud`)**
+   - Utilizes `boto3` SDK to sync model weights (`risk_model.pth`, `dataset.pkl`), ingest raw document corpora, and archive generated audit plots.
 
-### Prerequisites
-- Python 3.8+
-- `numpy`
+3. **Risk & Behavior Engine (`backend/shap_service`)**
+   - PyTorch neural network evaluating customer behavior signals with SHAP feature attribution vectors.
 
-### Installation
-```bash
-pip install numpy
+4. **Grounded Knowledge Assistant (`backend/rag_service`)**
+   - Qdrant vector database retrieval + Groq / LLaMA-3 with hallucination prevention and citation validation.
+
+5. **Contextual Action Policy (`backend/rl_service`)**
+   - Multi-armed bandit / Softmax policy mapping dominant root causes to interventions, with outcome tracking and feedback loop retraining.
+
+6. **Interactive Dashboard (`frontend/`)**
+   - React 18, TypeScript, Tailwind CSS, Lucide icons, Three.js 3D visualizers, and real-time AWS Cloud Health monitoring.
+
+---
+
+## Repository Structure
+
+```
+PulseIQ/
+├── backend/                  # Unified Python backend services
+│   ├── main.py               # Unified FastAPI server mounting all services
+│   ├── requirements.txt      # Backend Python dependencies (SQLAlchemy, Boto3, PyTorch)
+│   ├── Dockerfile            # Container build for FastAPI backend
+│   ├── pytest.ini            # Pytest configuration
+│   ├── db/                   # Database layer (SQLAlchemy models, seed, customer API)
+│   │   ├── database.py       # Engine & session management (RDS Postgres / SQLite)
+│   │   ├── models.py         # CustomerModel, RiskScoreModel, OutcomeModel, FeedbackModel
+│   │   ├── seed.py           # Auto-seed database script
+│   │   └── customer_routes.py# REST CRUD endpoints (/api/customers)
+│   ├── cloud/                # AWS cloud integration layer
+│   │   ├── s3_service.py     # Boto3 S3 upload/download and sync
+│   │   └── routes.py         # Cloud status and S3 file endpoints (/cloud)
+│   ├── rag_service/          # RAG Knowledge Assistant subsystem
+│   ├── rl_service/           # Contextual Bandit & Action Policy subsystem
+│   └── shap_service/         # Risk Prediction & SHAP Explainability subsystem
+├── frontend/                 # React 18 + TypeScript + Vite frontend
+│   ├── Dockerfile            # Multi-stage production Nginx container
+│   ├── nginx.conf            # Nginx reverse proxy configuration
+│   ├── package.json
+│   ├── vite.config.ts
+│   └── src/                  # Application components, views, hooks, and lib
+├── cloud/                    # AWS Infrastructure-as-Code and deployment
+│   ├── cloudformation.yml    # AWS CloudFormation template (EC2, S3, RDS, IAM)
+│   └── ec2-user-data.sh      # Automated cloud-init bootstrap script
+├── docs/                     # Pitch decks and project documentation
+├── docker-compose.yml        # Full-stack container orchestration
+├── .env.example              # Environment variables template
+└── .gitignore                # Git ignore configuration
 ```
 
-### Running the Validation
-Run the evaluation script to see the agent learn and validate all requirements:
+---
+
+## Deployment & Running Instructions
+
+### Option 1: 1-Click Docker Compose (Local or EC2)
+
+Run the full stack with PostgreSQL, Qdrant, FastAPI backend, and Nginx frontend:
+
 ```bash
-python evaluate.py
+docker compose up --build -d
 ```
 
-## Validation Outputs Explained
+- Frontend: `http://localhost` (or `http://localhost:3000`)
+- Backend API Docs: `http://localhost:8000/docs`
+- PostgreSQL: `localhost:5432`
+- Qdrant: `localhost:6333`
 
-1. **Training Progress**: Shows the average reward over the first and last 100 episodes. It should trend up, indicating the bandit is learning from the simulated engagement rewards.
-2. **Claim-2 Test**: Proves the bandit uses the detailed *attributions* vector, not just the raw risk score. It generates two synthetic users with the same exact `risk_score` (0.8) but different dominant attributions, and shows the bandit selects different actions.
-3. **Policy Recovery Table**: Compares what the trained bandit thinks is the best action for each root cause against the hidden ground truth mapping. It should match with high accuracy.
-4. **Aggregation / Root-cause Report**: Uses K-Means clustering over the log history to cluster users by attribution behavior and reports the dominant cause, recommended action, and average outcome for each cluster.
-5. **Example Feedback Payload**: An example JSON payload that will be sent to Person 1 (Risk Engine) for retraining.
+---
 
-## Swapping to Real Endpoints
+### Option 2: Deploy to AWS EC2 using CloudFormation
 
-Once Person 1 (Risk Engine) and Person 2 (Knowledge Assistant) publish their real HTTP endpoints, you can integrate them with zero interface changes to the core system:
+1. Open the **AWS CloudFormation Console**.
+2. Select **Create Stack** > **With new resources (standard)**.
+3. Upload `cloud/cloudformation.yml`.
+4. Specify your parameters:
+   - `InstanceType`: `t3.micro` or `t2.micro` (Free Tier)
+   - `S3BucketName`: `pulseiq-cloud-artifacts` (or a unique bucket name)
+5. Review and click **Submit**.
+6. Once provisioned, check the **Outputs** tab for your public frontend URL and backend documentation URL.
 
-1. Open `mocks.py`.
-2. In `RiskEngineClient.get_risk_score(self, user_id, _injected_cause=None)`, replace the mock generation with a real `requests.get(f"https://api.example.internal/risk/score/{user_id}")` call and return the JSON response.
-3. In `KnowledgeAssistantClient.get_knowledge_response(self, user_id, issue_text)`, replace the mock generation with a real `requests.post("https://api.example.internal/knowledge/respond", json={"user_id": user_id, "issue_text": issue_text})` call and return the JSON response.
+---
 
-**Handling Schema Mismatches:** If Person 1 or Person 2's real response doesn't exactly match the mock schema (e.g., a missing field or different value range), log a warning rather than crashing. Use `.get()` with safe fallbacks in `agent.py` to ensure a schema mismatch is visible but doesn't take down the whole pipeline during integration.
+### Option 3: Local Development (Without Docker)
 
-**Hardcoded Assumptions to Revisit:**
-- **Fixed $k=4$ in aggregation:** The aggregation layer uses a fixed $k=4$ to match our known synthetic causes. Once real data is flowing, revisit this clustering logic to determine $k$ dynamically (e.g., elbow method or silhouette score).
-- **ATTRIBUTION_ACTION_MAP (Reward Simulation):** The current ground-truth mapping in `env.py` is hardcoded for synthetic testing. In the real system, you won't simulate rewards—you will measure real user engagement—so the `Simulator` and `RewardFunction` will be retired, but ensure the live system is capturing actual outcomes appropriately.
+#### 1. Backend Setup
+```bash
+cd backend
+python -m venv venv
+# On Windows:
+.\venv\Scripts\activate
+# On macOS/Linux:
+source venv/bin/activate
+
+pip install -r requirements.txt
+python main.py
+```
+
+#### 2. Frontend Setup
+```bash
+cd frontend
+npm install
+npm run dev
+```
+Open `http://localhost:5173` in your browser.
+
+---
+
+## Environment Variables Configuration
+
+Create a `.env` file at the root:
+
+```ini
+# Database (AWS RDS PostgreSQL or SQLite)
+DATABASE_URL=sqlite:///./pulseiq.db
+# For AWS RDS: DATABASE_URL=postgresql://user:password@mydb.xxxxxx.us-east-1.rds.amazonaws.com:5432/pulseiq_db
+
+# LLM & RAG Configuration
+GROQ_API_KEY=your_groq_api_key_here
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
+QDRANT_COLLECTION_NAME=pulseiq_knowledge
+
+# AWS Cloud Credentials (Optional for local simulation)
+AWS_REGION=us-east-1
+AWS_S3_BUCKET=pulseiq-cloud-artifacts
+AWS_ACCESS_KEY_ID=your_aws_access_key_id
+AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key
+```
+
+---
+
+## API Endpoints Reference
+
+| Endpoint | Method | Subsystem | Description |
+|---|---|---|---|
+| `/health` | GET | System | Health check and cloud provider status |
+| `/api/customers` | GET | Database | Retrieve all customers from relational DB |
+| `/api/customers/{id}` | GET | Database | Get specific customer profile |
+| `/api/customers` | POST | Database | Create a new customer profile |
+| `/cloud/status` | GET | AWS Cloud | AWS infrastructure status (EC2, S3, RDS) |
+| `/cloud/sync-s3` | POST | AWS Cloud | Sync model weights and docs with S3 |
+| `/shap/risk/score` | POST | SHAP Engine | Compute churn risk and SHAP attributions |
+| `/shap/feedback` | POST | SHAP Engine | Persist feedback to database |
+| `/rag/knowledge/respond` | POST | RAG Assistant | Contextual document retrieval & grounded LLM |
+| `/policy/decide` | POST | RL Policy | Softmax action policy recommendation |
+| `/policy/outcome` | POST | RL Policy | Log intervention outcome to database |
+| `/policy/aggregate` | GET | RL Policy | Root-cause aggregation and success rates |
+
+---
+
+## Testing & Verification
+
+```bash
+# Run backend tests
+python -m pytest backend/rl_service/test_action_policy.py
+python -m pytest backend/shap_service/tests/test_shap.py
+
+# Test database seeding
+python -m backend.db.seed
+
+# Verify frontend build
+cd frontend
+npm run typecheck
+npm run build
+```
+
+---
+
+## License
+
+MIT License. Open source for cloud deployment and portfolio evaluation.

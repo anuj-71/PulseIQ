@@ -51,7 +51,7 @@ class RiskEngineClient:
             "risk_score": round(risk_score, 2),
             "attributions": attr_list,
             "model_version": "mock-risk-v1",
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat() + "Z"
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
         }
 
 
@@ -68,7 +68,7 @@ class KnowledgeAssistantClient:
             resp['confidence'] = round(random.uniform(0.7, 0.95), 2)
             return resp
 
-        api_key = os.getenv("PERSON2_API_KEY")
+        api_key = os.getenv("GROQ_API_KEY") or os.getenv("PERSON2_API_KEY")
         if not api_key:
             # Fallback to mock if API key is not present
             return {

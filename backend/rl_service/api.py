@@ -1,12 +1,15 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import datetime
 import uuid
+from sqlalchemy.orm import Session
+from backend.db.database import get_db
+from backend.db.models import OutcomeModel
 
 router = APIRouter()
 
-# In-memory store for outcomes (simulating a database)
+# In-memory store fallback and cache
 outcomes_db = []
 
 POLICY_MODEL_VERSION = 'policy-softmax-v1.6.0'
@@ -131,7 +134,7 @@ def decide_action(req: DecideRequest):
         knowledge_confidence=req.knowledge_confidence,
         model_version=POLICY_MODEL_VERSION,
         timestamp=datetime.datetime.now(
-            datetime.timezone.utc).isoformat() + "Z"
+            datetime.timezone.utc).isoformat()
     )
 
 
@@ -140,23 +143,33 @@ class LogOutcomeRequest(BaseModel):
 
 
 @router.post("/outcome")
-def log_outcome(req: LogOutcomeRequest):
+def log_outcome(req: LogOutcomeRequest, db: Session = Depends(get_db)):
     dec = req.decision
     outcome_id = str(uuid.uuid4())
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
     record = {
         'id': outcome_id,
-        'customer_id': dec.get('customer_id'),
-        'customer_name': dec.get('customer_name'),
-        'risk_score': dec.get('risk_score'),
-        'risk_band': dec.get('risk_band'),
-        'top_attribution': dec.get('top_attribution'),
-        'selected_action': dec.get('selected_action'),
-        'knowledge_response': dec.get('knowledge_response'),
-        'confidence': dec.get('knowledge_confidence'),
+        'customer_id': dec.get('customer_id', 'unknown'),
+        'customer_name': dec.get('customer_name', 'Unknown'),
+        'risk_score': float(dec.get('risk_score', 0.0)),
+        'risk_band': dec.get('risk_band', 'moderate'),
+        'top_attribution': dec.get('top_attribution', 'usage_decline'),
+        'selected_action': dec.get('selected_action', 'proactive_nudge'),
+        'knowledge_response': dec.get('knowledge_response', ''),
+        'confidence': float(dec.get('knowledge_confidence', 0.0)),
         'outcome': 'pending',
-        'created_at': datetime.datetime.now(datetime.timezone.utc).isoformat() + "Z",
+        'created_at': now_iso,
         'resolved_at': None
     }
+
+    try:
+        db_outcome = OutcomeModel(**record)
+        db.add(db_outcome)
+        db.commit()
+    except Exception as e:
+        print(f"[Outcome DB] Error writing to database: {e}")
+
     outcomes_db.insert(0, record)
     return record
 
@@ -167,13 +180,40 @@ class UpdateOutcomeRequest(BaseModel):
 
 
 @router.post("/outcome/update")
-def update_outcome(req: UpdateOutcomeRequest):
+def update_outcome(req: UpdateOutcomeRequest, db: Session = Depends(get_db)):
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    
+    # 1. Update in DB
+    try:
+        db_record = db.query(OutcomeModel).filter(OutcomeModel.id == req.id).first()
+        if db_record:
+            db_record.outcome = req.outcome
+            db_record.resolved_at = now_iso
+            db.commit()
+            return {
+                'id': db_record.id,
+                'customer_id': db_record.customer_id,
+                'customer_name': db_record.customer_name,
+                'risk_score': db_record.risk_score,
+                'risk_band': db_record.risk_band,
+                'top_attribution': db_record.top_attribution,
+                'selected_action': db_record.selected_action,
+                'knowledge_response': db_record.knowledge_response,
+                'confidence': db_record.confidence,
+                'outcome': db_record.outcome,
+                'created_at': db_record.created_at,
+                'resolved_at': db_record.resolved_at
+            }
+    except Exception as e:
+        print(f"[Outcome DB] Error querying database: {e}")
+
+    # 2. Fallback to memory
     for record in outcomes_db:
         if record['id'] == req.id:
             record['outcome'] = req.outcome
-            record['resolved_at'] = datetime.datetime.now(
-                datetime.timezone.utc).isoformat() + "Z"
+            record['resolved_at'] = now_iso
             return record
+
     raise HTTPException(status_code=404, detail="Outcome not found")
 
 
@@ -183,11 +223,36 @@ def retrain():
 
 
 @router.get("/aggregate")
-def aggregate():
+def aggregate(db: Session = Depends(get_db)):
+    # Read from DB first
+    records = []
+    try:
+        db_records = db.query(OutcomeModel).all()
+        for r in db_records:
+            records.append({
+                'id': r.id,
+                'customer_id': r.customer_id,
+                'customer_name': r.customer_name,
+                'risk_score': r.risk_score,
+                'risk_band': r.risk_band,
+                'top_attribution': r.top_attribution,
+                'selected_action': r.selected_action,
+                'knowledge_response': r.knowledge_response,
+                'confidence': r.confidence,
+                'outcome': r.outcome,
+                'created_at': r.created_at,
+                'resolved_at': r.resolved_at
+            })
+    except Exception as e:
+        print(f"[Outcome DB] Error fetching records: {e}")
+
+    if not records:
+        records = outcomes_db
+
     by_action = {}
     by_root = {}
 
-    for r in outcomes_db:
+    for r in records:
         act = r['selected_action']
         if act not in by_action:
             by_action[act] = {'count': 0, 'success_rate': 0}
@@ -200,7 +265,7 @@ def aggregate():
         by_root[root]['riskSum'] += r['risk_score']
 
     for a in by_action.keys():
-        acts = [r for r in outcomes_db if r['selected_action'] == a]
+        acts = [r for r in records if r['selected_action'] == a]
         resolved = [r for r in acts if r['outcome'] != 'pending']
         success = len([r for r in resolved if r['outcome'] == 'success'])
         by_action[a]['success_rate'] = success / \
@@ -213,6 +278,7 @@ def aggregate():
             'pricing_concern': 'Pricing concern',
             'sentiment_decline': 'Sentiment decline',
             'engagement_drop': 'Engagement drop',
+            'billing_anomaly': 'Billing anomaly'
         }
         return map_labels.get(feature, feature)
 
@@ -227,7 +293,7 @@ def aggregate():
     by_root_cause.sort(key=lambda x: x['count'], reverse=True)
 
     return {
-        "total": len(outcomes_db),
+        "total": len(records),
         "by_action": by_action,
         "by_root_cause": by_root_cause,
         "model_version": POLICY_MODEL_VERSION,
@@ -247,3 +313,4 @@ def receive_feedback(payload: FeedbackPayload):
     print(
         f"\n[RL Engine] Received Feedback: {payload.feedback} for User {payload.user_id} on action '{payload.action}'\n")
     return {"status": "success", "message": f"Feedback {payload.feedback} recorded for RL engine"}
+

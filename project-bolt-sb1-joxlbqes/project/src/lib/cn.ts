@@ -1,4 +1,0 @@
-// Tiny className combiner — avoids pulling in clsx for one helper.
-export function cn(...parts: (string | false | null | undefined)[]): string {
-  return parts.filter(Boolean).join(' ');
-}

@@ -1,0 +1,160 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'PulseIQ Full-Stack AWS Cloud Infrastructure Template (EC2, S3, RDS PostgreSQL, Security Groups, IAM)'
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: 't3.micro'
+    AllowedValues:
+      - 't2.micro'
+      - 't3.micro'
+      - 't3.small'
+      - 't3.medium'
+    Description: 'EC2 instance type for running PulseIQ containers (t2.micro / t3.micro are AWS Free Tier eligible)'
+
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64'
+    Description: 'Latest Amazon Linux 2023 AMI ID'
+
+  S3BucketName:
+    Type: String
+    Default: 'pulseiq-cloud-artifacts'
+    Description: 'Global unique name for PulseIQ S3 model artifacts and documents bucket'
+
+Resources:
+  # 1. Amazon S3 Bucket for Model Artifacts and Knowledge Base Corpus
+  PulseIQBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Ref S3BucketName
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # 2. IAM Role for EC2 Instance to Access S3
+  PulseIQEC2Role:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: PulseIQS3AccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:PutObject'
+                  - 's3:ListBucket'
+                  - 's3:DeleteObject'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${PulseIQBucket}'
+                  - !Sub 'arn:aws:s3:::${PulseIQBucket}/*'
+
+  PulseIQInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Roles:
+        - !Ref PulseIQEC2Role
+
+  # 3. Security Group for Web Traffic and API
+  PulseIQSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Allow HTTP, HTTPS, FastAPI, and SSH traffic for PulseIQ'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: 'HTTP Web Frontend'
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: 'HTTPS Web Frontend'
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          CidrIp: 0.0.0.0/0
+          Description: 'FastAPI Backend Swagger & API'
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: 'SSH Remote Administration'
+
+  # 4. Amazon EC2 Instance
+  PulseIQServer:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref LatestAmiId
+      IamInstanceProfile: !Ref PulseIQInstanceProfile
+      SecurityGroupIds:
+        - !Ref PulseIQSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp3
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          echo "==== Initializing PulseIQ Cloud Node on AWS EC2 ===="
+          dnf update -y
+          dnf install -y docker git
+          systemctl enable --now docker
+          usermod -aG docker ec2-user
+
+          # Install Docker Compose Plugin
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+          echo "AWS EC2 Docker provisioning complete!"
+      Tags:
+        - Key: Name
+          Value: PulseIQ-Cloud-Server
+        - Key: Project
+          Value: PulseIQ
+
+Outputs:
+  ServerPublicIP:
+    Description: 'Public IP of the PulseIQ EC2 Instance'
+    Value: !GetAtt PulseIQServer.PublicIp
+
+  ServerPublicDNS:
+    Description: 'Public DNS of the PulseIQ EC2 Instance'
+    Value: !GetAtt PulseIQServer.PublicDnsName
+
+  FrontendURL:
+    Description: 'Web application URL'
+    Value: !Sub 'http://${PulseIQServer.PublicIp}'
+
+  BackendAPIURL:
+    Description: 'FastAPI Interactive Documentation'
+    Value: !Sub 'http://${PulseIQServer.PublicIp}:8000/docs'
+
+  S3Bucket:
+    Description: 'Amazon S3 Artifacts Bucket'
+    Value: !Ref PulseIQBucket

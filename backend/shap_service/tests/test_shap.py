@@ -15,5 +15,5 @@ def test_shap_output():
 
     result = explain_customer(sample)
 
-    assert "risk_score" in result
+    assert "risk_score" in resultcl
     assert "attributions" in result

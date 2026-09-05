@@ -27,43 +27,73 @@ def get_qdrant_client():
     return _qdrant_client
 
 
+def _fallback_local_retrieve(query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    from pathlib import Path
+    raw_docs_dir = Path(__file__).resolve().parent.parent.parent.parent / "data" / "raw_docs"
+    if not raw_docs_dir.exists():
+        return []
+
+    query_words = set(query.lower().split())
+    doc_scores = []
+
+    for file_path in raw_docs_dir.glob("*.md"):
+        content = file_path.read_text(encoding="utf-8", errors="ignore")
+        lines = content.splitlines()
+        title = lines[0].replace("#", "").strip() if lines else file_path.stem
+        words = set(content.lower().split())
+        overlap = len(query_words.intersection(words))
+        score = min(0.95, 0.4 + (overlap / max(1, len(query_words))) * 0.5) if overlap > 0 else 0.2
+
+        doc_scores.append({
+            "doc_id": file_path.stem,
+            "title": title,
+            "content": content[:1000],
+            "doc_type": "Documentation",
+            "source_version": "1.0",
+            "score": round(score, 2)
+        })
+
+    doc_scores.sort(key=lambda x: x["score"], reverse=True)
+    return doc_scores[:top_k]
+
+
 def retrieve(query: str, top_k: int = 5) -> List[Dict[str, Any]]:
     """
     Embeds the query and retrieves the top_k most relevant chunks from Qdrant.
+    Falls back to local document search if Qdrant is unavailable.
     """
     load_dotenv()
     collection_name = os.getenv("QDRANT_COLLECTION_NAME", "pulseiq_knowledge")
 
-    embedder = get_embedder()
-    client = get_qdrant_client()
+    try:
+        embedder = get_embedder()
+        client = get_qdrant_client()
 
-    # 1. Embed the query
-    # The DocumentEmbedder takes a list and returns a list of embeddings.
-    # We pass a single query and take the first vector.
-    query_vector = embedder.embed_chunks([query])[0]
+        query_vector = embedder.embed_chunks([query])[0]
 
-    # 2. Search Qdrant
-    search_response = client.query_points(
-        collection_name=collection_name,
-        query=query_vector,
-        limit=top_k
-    )
+        search_response = client.query_points(
+            collection_name=collection_name,
+            query=query_vector,
+            limit=top_k
+        )
 
-    # 3. Format results
-    results = []
-    for scored_point in search_response.points:
-        payload = scored_point.payload
-        # Qdrant's cosine distance returns cosine similarity in the range [-1, 1].
-        # We normalize this to [0.0, 1.0] for easier consumption by the generation layer.
-        normalized_score = max(0.0, (scored_point.score + 1.0) / 2.0)
+        results = []
+        for scored_point in search_response.points:
+            payload = scored_point.payload
+            normalized_score = max(0.0, (scored_point.score + 1.0) / 2.0)
 
-        results.append({
-            "doc_id": payload.get("doc_id", "Unknown"),
-            "title": payload.get("title", "Untitled"),
-            "content": payload.get("content", ""),
-            "doc_type": payload.get("doc_type", "Unknown"),
-            "source_version": payload.get("source_version", "Unknown"),
-            "score": normalized_score
-        })
+            results.append({
+                "doc_id": payload.get("doc_id", "Unknown"),
+                "title": payload.get("title", "Untitled"),
+                "content": payload.get("content", ""),
+                "doc_type": payload.get("doc_type", "Unknown"),
+                "source_version": payload.get("source_version", "Unknown"),
+                "score": normalized_score
+            })
 
-    return results
+        if results:
+            return results
+    except Exception as e:
+        print(f"Notice: Qdrant connection unavailable ({e}). Using local markdown documentation fallback.")
+
+    return _fallback_local_retrieve(query, top_k)

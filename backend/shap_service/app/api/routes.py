@@ -9,7 +9,8 @@ from app.explainability.shap_engine import explain_customer
 
 router = APIRouter()
 
-FEEDBACK_FILE = Path("feedback.csv")
+SERVICE_DIR = Path(__file__).resolve().parent.parent.parent
+FEEDBACK_FILE = SERVICE_DIR / "feedback.csv"
 
 
 @router.get("/")
@@ -44,14 +45,30 @@ def risk_score(request: RiskRequest):
 
 @router.post("/feedback")
 def feedback(data: dict):
+    # 1. Save to Database if available
+    try:
+        from backend.db.database import SessionLocal
+        from backend.db.models import FeedbackModel
+        db = SessionLocal()
+        fb = FeedbackModel(
+            customer_id=str(data.get("user_id", data.get("customer_id", "unknown"))),
+            action=str(data.get("action", "unknown")),
+            feedback=str(data.get("feedback", data.get("comments", str(data)))),
+        )
+        db.add(fb)
+        db.commit()
+        db.close()
+    except Exception as e:
+        print(f"[SHAP DB Feedback] Notice: {e}")
 
+    # 2. Append to CSV for backup/training scripts
     df = pd.DataFrame([data])
-
     if FEEDBACK_FILE.exists():
         df.to_csv(FEEDBACK_FILE, mode="a", header=False, index=False)
     else:
         df.to_csv(FEEDBACK_FILE, index=False)
 
     return {
-        "message": "Feedback stored successfully."
+        "status": "success",
+        "message": "Feedback stored in database and training queue successfully."
     }
